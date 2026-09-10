@@ -887,16 +887,22 @@ impl Router {
             tokio::spawn(async move {
                 let _load_guard = load_guard;
                 let mut stream = stream;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(bytes) => {
-                            if tx.send(Ok(bytes)).is_err() {
-                                break;
+                loop {
+                    tokio::select! {
+                        _ = tx.closed() => break,
+                        chunk = stream.next() => {
+                            match chunk {
+                                Some(Ok(bytes)) => {
+                                    if tx.send(Ok(bytes)).is_err() {
+                                        break;
+                                    }
+                                }
+                                Some(Err(e)) => {
+                                    let _ = tx.send(Err(format!("Stream error: {}", e)));
+                                    break;
+                                }
+                                None => break,
                             }
-                        }
-                        Err(e) => {
-                            let _ = tx.send(Err(format!("Stream error: {}", e)));
-                            break;
                         }
                     }
                 }
@@ -1721,6 +1727,78 @@ mod tests {
         let _ = request.await;
 
         assert_eq!(worker.load(), 0);
+    }
+
+    #[tokio::test]
+    async fn streaming_client_drop_releases_load_while_upstream_stalls() {
+        use axum::{routing::post, Router as AxumRouter};
+        use std::convert::Infallible;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let worker_url = format!("http://{}", listener.local_addr().unwrap());
+        let app = AxumRouter::new().route(
+            "/generate",
+            post(|| async {
+                let body = Body::from_stream(futures_util::stream::pending::<
+                    Result<bytes::Bytes, Infallible>,
+                >());
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "text/event-stream")
+                    .body(body)
+                    .unwrap()
+            }),
+        );
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let worker_registry = Arc::new(WorkerRegistry::new());
+        let worker = Arc::new(BasicWorker::new(worker_url, WorkerType::Regular));
+        worker_registry.register(worker.clone());
+        let policy_registry = Arc::new(PolicyRegistry::new(
+            crate::config::types::PolicyConfig::CacheAware {
+                cache_threshold: 0.5,
+                balance_abs_threshold: 32,
+                balance_rel_threshold: 1.5,
+                eviction_interval_secs: 60,
+                max_tree_size: 1000,
+            },
+        ));
+        let (_, rx) = tokio::sync::watch::channel(HashMap::new());
+        let router = Router {
+            worker_registry,
+            policy_registry,
+            client: Client::new(),
+            worker_startup_timeout_secs: 5,
+            worker_startup_check_interval_secs: 1,
+            intra_node_data_parallel_size: 1,
+            api_key: None,
+            retry_config: RetryConfig::default(),
+            circuit_breaker_config: CircuitBreakerConfig::default(),
+            _worker_loads: Arc::new(rx),
+            _load_monitor_handle: None,
+        };
+        let request: GenerateRequest =
+            serde_json::from_str(r#"{"text":"hello","stream":true}"#).unwrap();
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            router.route_typed_request(None, &request, "/generate", None),
+        )
+        .await
+        .expect("response headers should arrive while the body is stalled");
+        assert_eq!(worker.load(), 1);
+
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while worker.load() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("client disconnect should release the worker load");
     }
 
     fn create_test_regular_router() -> Router {
