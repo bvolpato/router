@@ -995,6 +995,42 @@ mod router_policy_tests {
             assert_eq!(policy.active_count_for(url), 1);
         }
 
+        for (uri, body, active_sessions) in [
+            (
+                "/generate",
+                json!({"prompt": "hello", "session_id": "generate-session"}),
+                3,
+            ),
+            (
+                "/generate",
+                json!({"prompt": "hello", "user_id": "generate-user"}),
+                4,
+            ),
+            (
+                "/v1/responses",
+                json!({"input": "hello", "session_id": "responses-session"}),
+                5,
+            ),
+            (
+                "/v1/responses",
+                json!({"input": "hello", "user_id": "responses-user"}),
+                6,
+            ),
+        ] {
+            let request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(CONTENT_TYPE, "application/json")
+                .header("authorization", "Bearer test-token")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::OK
+            );
+            assert_eq!(policy.active_session_count(), active_sessions);
+        }
+
         let request = Request::builder()
             .method("POST")
             .uri("/v1/completions")
@@ -1009,7 +1045,7 @@ mod router_policy_tests {
             app.clone().oneshot(request).await.unwrap().status(),
             StatusCode::OK
         );
-        assert_eq!(policy.active_session_count(), 3);
+        assert_eq!(policy.active_session_count(), 7);
 
         let unauthorized = Request::builder()
             .method("POST")
@@ -1020,12 +1056,16 @@ mod router_policy_tests {
             app.clone().oneshot(unauthorized).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
-        assert_eq!(policy.active_session_count(), 3);
+        assert_eq!(policy.active_session_count(), 7);
 
         for (session, remaining) in [
-            ("ignored-body", 3),
-            ("header-session", 2),
-            ("header-session", 2),
+            ("ignored-body", 7),
+            ("header-session", 6),
+            ("header-session", 6),
+            ("generate-session", 5),
+            ("generate-user", 4),
+            ("responses-session", 3),
+            ("responses-user", 2),
             ("body-a", 1),
             ("body-b", 0),
         ] {
