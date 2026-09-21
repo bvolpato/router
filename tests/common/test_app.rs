@@ -5,7 +5,8 @@ use vllm_router_rs::{
     config::RouterConfig,
     otel_trace,
     routers::RouterTrait,
-    server::{build_app_with_request_tracing_and_generate_paths, AppContext, AppState},
+    server::{build_app_with_wasm_middleware_and_generate_paths, AppContext, AppState},
+    wasm_middleware::WasmMiddlewareRuntime,
 };
 
 /// Create a test Axum application using the actual server's build_app function
@@ -26,13 +27,7 @@ pub fn create_test_app_with_tracing(
     router_config: &RouterConfig,
     enable_request_tracing: bool,
 ) -> Router {
-    create_test_app_with_tracing_and_generate_paths(
-        router,
-        client,
-        router_config,
-        enable_request_tracing,
-        &[],
-    )
+    create_test_app_with_wasm(router, client, router_config, enable_request_tracing, None)
 }
 
 #[allow(dead_code)]
@@ -41,6 +36,44 @@ pub fn create_test_app_with_tracing_and_generate_paths(
     client: Client,
     router_config: &RouterConfig,
     enable_request_tracing: bool,
+    extra_generate_paths: &[String],
+) -> Router {
+    create_test_app_with_wasm_and_generate_paths(
+        router,
+        client,
+        router_config,
+        enable_request_tracing,
+        None,
+        extra_generate_paths,
+    )
+}
+
+/// Create a test Axum application with optional WASM OnRequest middleware.
+#[allow(dead_code)]
+pub fn create_test_app_with_wasm(
+    router: Arc<dyn RouterTrait>,
+    client: Client,
+    router_config: &RouterConfig,
+    enable_request_tracing: bool,
+    wasm_runtime: Option<Arc<WasmMiddlewareRuntime>>,
+) -> Router {
+    create_test_app_with_wasm_and_generate_paths(
+        router,
+        client,
+        router_config,
+        enable_request_tracing,
+        wasm_runtime,
+        &[],
+    )
+}
+
+#[allow(dead_code)]
+pub fn create_test_app_with_wasm_and_generate_paths(
+    router: Arc<dyn RouterTrait>,
+    client: Client,
+    router_config: &RouterConfig,
+    enable_request_tracing: bool,
+    wasm_runtime: Option<Arc<WasmMiddlewareRuntime>>,
     extra_generate_paths: &[String],
 ) -> Router {
     // Create AppContext
@@ -73,14 +106,15 @@ pub fn create_test_app_with_tracing_and_generate_paths(
         ]
     });
 
-    // Use the actual server's build_app function
-    build_app_with_request_tracing_and_generate_paths(
+    // Use the actual server's build_app function (with optional WASM layer)
+    build_app_with_wasm_middleware_and_generate_paths(
         app_state,
         router_config.max_payload_size,
         request_id_headers,
         router_config.cors_allowed_origins.clone(),
         true, // enable_transparent_proxy
         enable_request_tracing,
+        wasm_runtime,
         extra_generate_paths,
     )
 }
