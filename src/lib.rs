@@ -10,10 +10,12 @@ pub mod middleware;
 pub mod otel_http;
 pub mod otel_trace;
 pub mod policies;
+pub mod program_scheduling;
 pub mod protocols;
 pub mod routers;
 pub mod server;
 pub mod service_discovery;
+mod token_estimator;
 pub mod tokenizer;
 pub mod tree;
 pub mod wasm_middleware;
@@ -102,6 +104,9 @@ struct Router {
     otlp_traces_endpoint: Option<String>,
     // KV connector for PD disaggregation ("nixl" or "mooncake")
     kv_connector: String,
+    // Explicit Program-level scheduling feature switch and optional overrides.
+    enable_program_scheduling: bool,
+    program_scheduling_config_json: Option<String>,
 }
 
 impl Router {
@@ -242,6 +247,10 @@ impl Router {
                     });
                 }
             },
+            program_scheduling: config::ProgramSchedulingConfig::resolve(
+                self.enable_program_scheduling,
+                self.program_scheduling_config_json.as_deref(),
+            )?,
         })
     }
 }
@@ -319,6 +328,8 @@ impl Router {
         wasm_middleware_sha256 = None,
         wasm_middleware_routes = vec![],
         extra_generate_paths = vec![],
+        enable_program_scheduling = false,
+        program_scheduling_config_json = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -385,6 +396,8 @@ impl Router {
         wasm_middleware_sha256: Option<String>,
         wasm_middleware_routes: Vec<String>,
         extra_generate_paths: Vec<String>,
+        enable_program_scheduling: bool,
+        program_scheduling_config_json: Option<String>,
     ) -> PyResult<Self> {
         if wasm_middleware_sha256
             .as_deref()
@@ -418,6 +431,7 @@ impl Router {
             wasm_middleware,
             wasm_middleware_sha256,
             wasm_middleware_routes,
+            enable_program_scheduling,
             intra_node_data_parallel_size,
             api_key,
             api_key_validation_urls,
@@ -465,6 +479,7 @@ impl Router {
             enable_trace,
             otlp_traces_endpoint,
             kv_connector,
+            program_scheduling_config_json,
         })
     }
 
