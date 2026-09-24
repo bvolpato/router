@@ -11,7 +11,7 @@ use std::sync::Arc;
 mod cache_aware;
 mod consistent_hash;
 mod factory;
-mod hash_key;
+pub(crate) mod hash_key;
 mod power_of_two;
 mod random;
 mod registry;
@@ -19,7 +19,7 @@ mod rendezvous_hash;
 mod round_robin;
 mod sticky_least_loaded;
 
-pub use cache_aware::CacheAwarePolicy;
+pub use cache_aware::{CacheAwareCandidate, CacheAwarePlacement, CacheAwarePolicy};
 pub use consistent_hash::ConsistentHashPolicy;
 pub use consistent_hash::VIRTUAL_NODES_PER_WORKER;
 pub use factory::PolicyFactory;
