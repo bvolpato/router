@@ -579,6 +579,7 @@ class RouterArgs:
                 len(path) < 2
                 or not path.startswith("/")
                 or any(character in path for character in "?#{}*")
+                or any(segment.startswith(":") for segment in path.split("/"))
             ):
                 raise ValueError(f"invalid extra generate path: {path}")
         if self.wasm_middleware_sha256 and not self.wasm_middleware:

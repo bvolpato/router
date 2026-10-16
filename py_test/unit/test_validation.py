@@ -401,7 +401,11 @@ class TestLaunchValidation:
 
     def test_extra_generate_paths_accept_distinct_extension_routes(self):
         args = RouterArgs(
-            extra_generate_paths=["/custom/v1/generate", "/extension/generate"]
+            extra_generate_paths=[
+                "/custom/v1/generate",
+                "/extension/generate",
+                "/custom:generate",
+            ]
         )
 
         args._validate_router_args()
@@ -411,6 +415,8 @@ class TestLaunchValidation:
         [
             ["custom/v1/generate"],
             ["/custom/{path}"],
+            ["/:generate"],
+            ["/custom/:generate"],
             ["/custom/v1/generate", "/custom/v1/generate"],
         ],
     )
