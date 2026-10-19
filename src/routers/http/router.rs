@@ -2985,6 +2985,126 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    #[test]
+    fn request_load_guard_preserves_concurrent_load() {
+        let worker = Arc::new(BasicWorker::new(
+            "http://worker:8080".to_string(),
+            WorkerType::Regular,
+        ));
+        worker.increment_load();
+
+        {
+            worker.increment_load();
+            let _guard = RequestLoadGuard::new(Some(worker.clone()), None);
+            assert_eq!(worker.load(), 2);
+        }
+
+        assert_eq!(worker.load(), 1);
+    }
+
+    #[tokio::test]
+    async fn request_load_guard_releases_load_when_request_is_cancelled() {
+        let worker = Arc::new(BasicWorker::new(
+            "http://worker:8080".to_string(),
+            WorkerType::Regular,
+        ));
+        let worker_for_request: Arc<dyn Worker> = worker.clone();
+        let request = tokio::spawn(async move {
+            worker_for_request.increment_load();
+            let _guard = RequestLoadGuard::new(Some(worker_for_request), None);
+            std::future::pending::<()>().await;
+        });
+
+        while worker.load() == 0 {
+            tokio::task::yield_now().await;
+        }
+        request.abort();
+        let _ = request.await;
+
+        assert_eq!(worker.load(), 0);
+    }
+
+    #[tokio::test]
+    async fn streaming_client_drop_releases_load_while_upstream_stalls() {
+        use axum::{routing::post, Router as AxumRouter};
+        use std::convert::Infallible;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let worker_url = format!("http://{}", listener.local_addr().unwrap());
+        let app = AxumRouter::new().route(
+            "/generate",
+            post(|| async {
+                let body = Body::from_stream(futures_util::stream::pending::<
+                    Result<bytes::Bytes, Infallible>,
+                >());
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(CONTENT_TYPE, "text/event-stream")
+                    .body(body)
+                    .unwrap()
+            }),
+        );
+        let _server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let worker_registry = Arc::new(WorkerRegistry::new());
+        let worker = Arc::new(BasicWorker::new(worker_url, WorkerType::Regular));
+        worker_registry.register(worker.clone());
+        let policy_registry = Arc::new(PolicyRegistry::new(
+            crate::config::types::PolicyConfig::CacheAware {
+                cache_threshold: 0.5,
+                balance_abs_threshold: 32,
+                balance_rel_threshold: 1.5,
+                eviction_interval_secs: 60,
+                max_tree_size: 1000,
+            },
+        ));
+        let (_, rx) = tokio::sync::watch::channel(HashMap::new());
+        let router = Router {
+            epd: None,
+            worker_registry,
+            policy_registry,
+            client: Client::new(),
+            worker_startup_timeout_secs: 5,
+            worker_startup_check_interval_secs: 1,
+            intra_node_data_parallel_size: 1,
+            api_key: None,
+            retry_config: RetryConfig::default(),
+            circuit_breaker_config: CircuitBreakerConfig::default(),
+            health_config: HealthConfig::default(),
+            frontend: crate::backend::EngineFrontend::new(),
+            _worker_loads: Arc::new(rx),
+            _load_monitor_handle: None,
+            kv_index_supervisor: None,
+            _kv_signal_handle: None,
+            program_scheduler: None,
+            _program_observation_handle: None,
+            program_targets_cache: Mutex::new(HashMap::new()),
+            program_token_estimator: Arc::new(MomentumTokenEstimator::default()),
+        };
+        let request: GenerateRequest =
+            serde_json::from_str(r#"{"text":"hello","stream":true}"#).unwrap();
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            router.route_typed_request(None, &request, "/generate", None),
+        )
+        .await
+        .expect("response headers should arrive while the body is stalled");
+        assert_eq!(worker.load(), 1);
+
+        drop(response);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while worker.load() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("client disconnect should release the worker load");
+    }
+
     fn create_test_regular_router() -> Router {
         // Create registries
         let worker_registry = Arc::new(WorkerRegistry::new());
@@ -3346,6 +3466,58 @@ mod tests {
             0,
             "cancellation must release the admission load"
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transparent_request_cancellation_preserves_other_requests_load() {
+        use axum::routing::post;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            post(std::future::pending::<Response>),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let worker: Arc<dyn Worker> = Arc::new(BasicWorker::new(url, WorkerType::Regular));
+        let mut router = create_test_regular_router();
+        router.worker_registry = Arc::new(WorkerRegistry::new());
+        router.worker_registry.register(worker.clone());
+        router.policy_registry = Arc::new(PolicyRegistry::new(
+            crate::config::PolicyConfig::CacheAware {
+                cache_threshold: 0.5,
+                balance_abs_threshold: 32,
+                balance_rel_threshold: 1.5,
+                eviction_interval_secs: 60,
+                max_tree_size: 1000,
+            },
+        ));
+        worker.increment_load();
+        let other_request = RequestLoadGuard::new(Some(worker.clone()), None);
+        let request = tokio::spawn(async move {
+            router
+                .route_transparent(
+                    None,
+                    "/v1/chat/completions",
+                    &Method::POST,
+                    serde_json::json!({"messages": []}),
+                )
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while worker.load() != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("transparent request should acquire its own load guard");
+
+        request.abort();
+        let _ = request.await;
+        assert_eq!(worker.load(), 1);
+        drop(other_request);
+        assert_eq!(worker.load(), 0);
         server.abort();
     }
 
