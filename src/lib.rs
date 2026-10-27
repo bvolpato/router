@@ -284,7 +284,7 @@ impl Router {
         balance_abs_threshold = 64,
         balance_rel_threshold = 1.5,
         eviction_interval_secs = 120,
-        max_tree_size = 2usize.pow(26),
+        max_tree_size = 2usize.pow(25),
         max_payload_size = 512 * 1024 * 1024,  // 512MB default for large batches
         intra_node_data_parallel_size = 1,
         api_key = None,
@@ -342,13 +342,13 @@ impl Router {
         wasm_middleware = None,
         wasm_middleware_sha256 = None,
         wasm_middleware_routes = vec![],
-        extra_generate_paths = vec![],
         enable_program_scheduling = false,
         program_scheduling_config_json = None,
         router_temperature = 0.0,
         kv_penalty_host = 0.8,
         kv_penalty_external = 0.6,
         kv_penalty_disk = 0.3,
+        extra_generate_paths = vec![],
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -414,13 +414,13 @@ impl Router {
         wasm_middleware: Option<String>,
         wasm_middleware_sha256: Option<String>,
         wasm_middleware_routes: Vec<String>,
-        extra_generate_paths: Vec<String>,
         enable_program_scheduling: bool,
         program_scheduling_config_json: Option<String>,
         router_temperature: f64,
         kv_penalty_host: f64,
         kv_penalty_external: f64,
         kv_penalty_disk: f64,
+        extra_generate_paths: Vec<String>,
     ) -> PyResult<Self> {
         if wasm_middleware_sha256
             .as_deref()

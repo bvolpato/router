@@ -28,7 +28,7 @@ class Router:
         worker_urls: List of URLs for worker nodes that will handle requests. Each URL should include
             the protocol, host, and port (e.g., ['http://worker1:8000', 'http://worker2:8000'])
         extra_generate_paths: Additional HTTP paths that use the inference-generate request schema.
-            Requests on these paths use typed routing, retries, circuit breaking, and load tracking.
+            Requests on these paths use typed routing and load tracking.
         policy: Load balancing policy to use. Options:
             - PolicyType.Random: Randomly select workers
             - PolicyType.RoundRobin: Distribute requests in round-robin fashion
@@ -49,7 +49,7 @@ class Router:
         eviction_interval_secs: Interval in seconds between cache eviction operations in cache-aware
             routing. Default: 60
         max_payload_size: Maximum payload size in bytes. Default: 256MB
-        max_tree_size: Maximum size of the approximation tree for cache-aware routing. Default: 2^24
+        max_tree_size: Character budget per worker per model for cache-aware routing. Default: 2^25
         intra_node_data_parallel_size: Data parallel size for DP-aware routing (automatically enabled when > 1). Default: 1
         enable_igw: Enable IGW (Inference-Gateway) mode for multi-model support. When enabled,
             the router can manage multiple models simultaneously with per-model load balancing
