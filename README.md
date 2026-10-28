@@ -96,6 +96,9 @@ when IGW is enabled. In discovery mode, model-scoped requests require matching
 model and worker-role metadata in the worker registry. They return 503 when no
 matching prefill or decode worker is registered.
 
+Rust embedders must set `ServerConfig.extra_generate_paths`. Use an empty vector
+to keep only the built-in typed routes.
+
 ```bash
 vllm-router \
   --worker-urls http://worker1:8000 http://worker2:8000 \
@@ -287,11 +290,11 @@ vllm-router \
 
 ### Command Line Arguments Reference
 
-#### Service Discovery
-- `--service-discovery`: Enable Kubernetes service discovery
-- `--service-discovery-port`: Port for worker URLs (default: 8000)
-- `--service-discovery-namespace`: Kubernetes namespace to watch
-- `--selector`: Label selectors for regular mode (format: `key1=value1 key2=value2`)
+See the [complete CLI reference](docs/cli_reference.md) for server and worker
+configuration, routing policies, PD disaggregation, Program scheduling, service
+discovery, reliability, observability, authentication and middleware options.
+It lists types, accepted values, defaults and repeatable arguments separately
+for the Rust binary and Python launcher, whose supported options differ.
 
 ## Development
 

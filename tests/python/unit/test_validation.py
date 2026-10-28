@@ -419,6 +419,12 @@ class TestLaunchValidation:
             ["/custom/{path}"],
             ["/:generate"],
             ["/custom/:generate"],
+            ["/health"],
+            ["/inference/v1/generate"],
+            ["/v1/responses"],
+            ["/v1/responses/response-id/cancel"],
+            ["/workers"],
+            ["/workers/http://worker:8000"],
             ["/custom/v1/generate", "/custom/v1/generate"],
         ],
     )

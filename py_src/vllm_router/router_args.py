@@ -5,6 +5,31 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_RESERVED_GENERATE_PATHS = {
+    "/generate",
+    "/inference/v1/generate",
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/rerank",
+    "/v1/rerank",
+    "/v1/responses",
+    "/v1/embeddings",
+    "/liveness",
+    "/readiness",
+    "/health",
+    "/health_generate",
+    "/v1/models",
+    "/get_model_info",
+    "/get_server_info",
+    "/add_worker",
+    "/remove_worker",
+    "/list_workers",
+    "/flush_cache",
+    "/get_loads",
+    "/scheduling/diagnostics",
+    "/workers",
+}
+
 
 @dataclasses.dataclass
 class RouterArgs:
@@ -29,6 +54,11 @@ class RouterArgs:
     kv_penalty_host: float = 0.8
     kv_penalty_external: float = 0.6
     kv_penalty_disk: float = 0.3
+    kv_aware_session_affinity_ttl_secs: Optional[int] = None
+    kv_event_source: List[str] = dataclasses.field(default_factory=list)
+    kv_event_replay_source: List[str] = dataclasses.field(default_factory=list)
+    kv_event_block_size: int = 16
+    kv_event_model: Optional[str] = None
     worker_startup_timeout_secs: int = 600
     worker_startup_check_interval: int = 30
     cache_threshold: float = 0.3
@@ -143,7 +173,10 @@ class RouterArgs:
             type=str,
             nargs="*",
             default=[],
-            help="Additional HTTP paths using the inference-generate request schema",
+            help=(
+                "Additional HTTP paths using the inference-generate request schema. "
+                "Built-in routes and the /v1/responses/ and /workers/ prefixes are reserved."
+            ),
         )
 
         parser.add_argument(
@@ -225,6 +258,38 @@ class RouterArgs:
             type=float,
             default=RouterArgs.kv_penalty_disk,
             help="Disk-tier KV transfer credit for kv_aware (0.0-1.0)",
+        )
+        parser.add_argument(
+            f"--{prefix}kv-aware-session-affinity-ttl-secs",
+            type=int,
+            default=None,
+            help="Enable KV-aware session affinity with an idle TTL of 1-31536000 seconds",
+        )
+        parser.add_argument(
+            f"--{prefix}kv-event-source",
+            action="append",
+            default=[],
+            metavar="WORKER_URL=ENDPOINT[,ENDPOINT...]",
+            help="Static ZMQ KV event source for a kv_aware worker; repeat per worker",
+        )
+        parser.add_argument(
+            f"--{prefix}kv-event-replay-source",
+            action="append",
+            default=[],
+            metavar="WORKER_URL=ENDPOINT[,ENDPOINT...]",
+            help="Optional ZMQ replay endpoint(s) matching a worker's static event source",
+        )
+        parser.add_argument(
+            f"--{prefix}kv-event-block-size",
+            type=int,
+            default=RouterArgs.kv_event_block_size,
+            help="KV block size for static event sources",
+        )
+        parser.add_argument(
+            f"--{prefix}kv-event-model",
+            type=str,
+            default=None,
+            help="Shared model identity for workers with static event sources",
         )
 
         # PD-specific arguments
@@ -608,8 +673,18 @@ class RouterArgs:
                 or not path.startswith("/")
                 or any(character in path for character in "?#{}*")
                 or any(segment.startswith(":") for segment in path.split("/"))
+                or path in _RESERVED_GENERATE_PATHS
+                or path.startswith(("/v1/responses/", "/workers/"))
             ):
-                raise ValueError(f"invalid extra generate path: {path}")
+                raise ValueError(f"invalid or conflicting extra generate path: {path}")
+
+        if self.kv_aware_session_affinity_ttl_secs is not None and not (
+            1 <= self.kv_aware_session_affinity_ttl_secs <= 31_536_000
+        ):
+            raise ValueError(
+                "kv_aware_session_affinity_ttl_secs must be between 1 and 31536000"
+            )
+
         if self.wasm_middleware_sha256 and not self.wasm_middleware:
             raise ValueError("wasm_middleware_sha256 requires wasm_middleware")
 

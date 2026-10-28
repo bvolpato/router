@@ -70,7 +70,12 @@ impl AppContext {
         let rate_limiter = Arc::new(TokenBucket::new(max_concurrent_requests, rate_limit_tokens));
 
         let worker_registry = Arc::new(WorkerRegistry::new());
-        let policy_registry = Arc::new(PolicyRegistry::new(router_config.policy.clone()));
+        let policy_registry = Arc::new(PolicyRegistry::new_with_affinity_ttl(
+            router_config.policy.clone(),
+            router_config
+                .kv_aware_session_affinity_ttl_secs
+                .map(std::time::Duration::from_secs),
+        ));
 
         let router_manager = None;
 
@@ -749,6 +754,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub router_config: RouterConfig,
     pub max_payload_size: usize,
+    pub extra_generate_paths: Vec<String>,
     pub wasm_middleware: Option<String>,
     pub wasm_middleware_sha256: Option<String>,
     pub wasm_middleware_routes: Vec<String>,
@@ -846,46 +852,6 @@ pub fn build_app_with_request_tracing(
         enable_transparent_proxy,
         enable_request_tracing,
         None,
-    )
-}
-
-pub fn build_app_with_generate_paths(
-    app_state: Arc<AppState>,
-    max_payload_size: usize,
-    request_id_headers: Vec<String>,
-    cors_allowed_origins: Vec<String>,
-    enable_transparent_proxy: bool,
-    extra_generate_paths: &[String],
-) -> Router {
-    build_app_with_request_tracing_and_generate_paths(
-        app_state,
-        max_payload_size,
-        request_id_headers,
-        cors_allowed_origins,
-        enable_transparent_proxy,
-        crate::otel_trace::is_otel_enabled(),
-        extra_generate_paths,
-    )
-}
-
-pub fn build_app_with_request_tracing_and_generate_paths(
-    app_state: Arc<AppState>,
-    max_payload_size: usize,
-    request_id_headers: Vec<String>,
-    cors_allowed_origins: Vec<String>,
-    enable_transparent_proxy: bool,
-    enable_request_tracing: bool,
-    extra_generate_paths: &[String],
-) -> Router {
-    build_app_with_wasm_middleware_and_generate_paths(
-        app_state,
-        max_payload_size,
-        request_id_headers,
-        cors_allowed_origins,
-        enable_transparent_proxy,
-        enable_request_tracing,
-        None,
-        extra_generate_paths,
     )
 }
 
@@ -1028,16 +994,9 @@ pub fn build_app_with_wasm_middleware_and_generate_paths(
 }
 
 pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Error>> {
-    startup_with_generate_paths(config, vec![]).await
-}
-
-pub async fn startup_with_generate_paths(
-    config: ServerConfig,
-    extra_generate_paths: Vec<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
     println!("DEBUG: Server startup function called");
 
-    validate_extra_generate_paths(&extra_generate_paths)?;
+    validate_extra_generate_paths(&config.extra_generate_paths)?;
 
     // Only initialize logging if not already done (for Python bindings support)
     static LOGGING_INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -1324,7 +1283,7 @@ pub async fn startup_with_generate_paths(
         enable_transparent_proxy,
         crate::otel_trace::is_otel_enabled(),
         wasm_runtime,
-        &extra_generate_paths,
+        &config.extra_generate_paths,
     );
 
     let addr = format!("{}:{}", config.host, config.port);
