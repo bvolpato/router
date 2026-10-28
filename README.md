@@ -278,8 +278,9 @@ one ID across disjoint model pools reassigns its single reservation between pool
 Idle sessions expire after two hours. Set
 `VLLM_ROUTER_SLL_SESSION_EXPIRATION_IN_S` on the router to override the TTL; expired
 entries are swept on routing requests at most once per minute. Revisited sessions
-are checked for expiry before refreshing their affinity. State is local to one
-router process and is lost on restart. Multiple routers need consistent ingress
+are checked for expiry before refreshing their affinity. TTL expiry or worker loss
+can move a session to another worker and reduce KV-cache reuse. State is local to
+one router process and is lost on restart. Multiple routers need consistent ingress
 routing and session release on each router that tracked the session.
 The policy keeps one entry per active session and serializes assignment under a
 mutex, so callers should release sessions
@@ -304,11 +305,11 @@ vllm-router \
 
 ### Command Line Arguments Reference
 
-#### Service Discovery
-- `--service-discovery`: Enable Kubernetes service discovery
-- `--service-discovery-port`: Port for worker URLs (default: 8000)
-- `--service-discovery-namespace`: Kubernetes namespace to watch
-- `--selector`: Label selectors for regular mode (format: `key1=value1 key2=value2`)
+See the [complete CLI reference](docs/cli_reference.md) for server and worker
+configuration, routing policies, PD disaggregation, Program scheduling, service
+discovery, reliability, observability, authentication and middleware options.
+It lists types, accepted values, defaults and repeatable arguments separately
+for the Rust binary and Python launcher, whose supported options differ.
 
 ## Development
 
