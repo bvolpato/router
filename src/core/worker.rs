@@ -58,7 +58,8 @@ pub trait Worker: Send + Sync + fmt::Debug {
     /// Decrement the load counter
     fn decrement_load(&self);
 
-    /// Reset the load counter to 0 (for sync/recovery)
+    /// Reset the load counter to 0 for explicit recovery after active requests drain.
+    /// Health checks must not call this: active guards still own their reservations.
     fn reset_load(&self) {
         // Default implementation - does nothing
         // Workers that track load should override this
@@ -849,6 +850,24 @@ impl<'a> WorkerLoadGuard<'a> {
             owned_worker: None,
         }
     }
+
+    /// Transfer a single-worker reservation without changing its load counter.
+    pub(crate) fn into_owned(mut self, worker: Arc<dyn Worker>) -> WorkerLoadGuard<'static> {
+        assert!(
+            (self.workers.len() == 1 && std::ptr::addr_eq(self.workers[0], worker.as_ref()))
+                || self
+                    .owned_worker
+                    .as_ref()
+                    .is_some_and(|reserved| Arc::ptr_eq(reserved, &worker)),
+            "the owned worker must match the reserved worker"
+        );
+        self.workers.clear();
+        self.owned_worker.take();
+        WorkerLoadGuard {
+            workers: Vec::new(),
+            owned_worker: Some(worker),
+        }
+    }
 }
 
 impl WorkerLoadGuard<'static> {
@@ -1414,6 +1433,24 @@ mod tests {
         }
 
         // Guard dropped, load decremented
+        assert_eq!(worker.load(), 0);
+    }
+
+    #[test]
+    fn test_load_guard_ownership_transfer_preserves_reservation() {
+        let worker: Arc<dyn Worker> = Arc::new(BasicWorker::new(
+            "http://test:8080".to_string(),
+            WorkerType::Regular,
+        ));
+        let other = WorkerLoadGuard::new_owned(worker.clone());
+        let borrowed = WorkerLoadGuard::new(worker.as_ref());
+        let owned = borrowed.into_owned(worker.clone());
+        let owned = owned.into_owned(worker.clone());
+        assert_eq!(worker.load(), 2);
+
+        drop(owned);
+        assert_eq!(worker.load(), 1);
+        drop(other);
         assert_eq!(worker.load(), 0);
     }
 
